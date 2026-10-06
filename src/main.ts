@@ -14,6 +14,7 @@
 import * as core from '@actions/core'
 import {context, getOctokit} from '@actions/github'
 import {IncomingWebhook} from '@slack/webhook'
+import {WebClient} from '@slack/web-api'
 import {MessageAttachment} from '@slack/types'
 
 // HACK: https://github.com/octokit/types.ts/issues/205
@@ -51,9 +52,11 @@ main().catch(handleError) // eslint-disable-line github/no-then
 // Action entrypoint
 async function main(): Promise<void> {
   // Collect Action Inputs
-  const webhook_url = core.getInput('slack_webhook_url', {
-    required: true
-  })
+  const webhook_url = core.getInput('slack_webhook_url')
+  const slack_token = core.getInput('slack_token')
+  if (!webhook_url && !slack_token) {
+    throw new Error('One of slack_webhook_url or slack_token is required')
+  }
   const github_token = core.getInput('repo_token', {required: true})
   const include_jobs = core.getInput('include_jobs', {
     required: true
@@ -72,7 +75,8 @@ async function main(): Promise<void> {
   const slack_emoji = core.getInput('icon_emoji') // https://www.webfx.com/tools/emoji-cheat-sheet/
   // Force as secret, forces *** when trying to print or log values
   core.setSecret(github_token)
-  core.setSecret(webhook_url)
+  if (webhook_url) core.setSecret(webhook_url)
+  if (slack_token) core.setSecret(slack_token)
   // Auth github with octokit module
   const octokit = getOctokit(github_token)
   // Fetch workflow run data
@@ -222,10 +226,22 @@ async function main(): Promise<void> {
     ...(slack_icon && {icon_url: slack_icon})
   }
 
-  const slack_webhook = new IncomingWebhook(webhook_url)
-
   try {
-    await slack_webhook.send(slack_payload_body)
+    if (slack_token) {
+      if (!slack_channel) {
+        throw new Error('channel is required when using slack_token')
+      }
+      await new WebClient(slack_token).chat.postMessage({
+        attachments: [slack_attachment],
+        channel: slack_channel,
+        ...(slack_name && {username: slack_name}),
+        ...(slack_emoji
+          ? {icon_emoji: slack_emoji}
+          : slack_icon && {icon_url: slack_icon})
+      })
+    } else {
+      await new IncomingWebhook(webhook_url).send(slack_payload_body)
+    }
   } catch (err) {
     if (err instanceof Error) {
       core.setFailed(err.message)
